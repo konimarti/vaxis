@@ -114,7 +114,6 @@ type Vaxis struct {
 	refresh          bool
 	kittyFlags       int
 	disableMouse     bool
-	chBg             chan string
 
 	xtwinops bool
 
@@ -127,6 +126,8 @@ type Vaxis struct {
 
 	mu     sync.Mutex
 	resize int32
+
+	osc11Request int32
 }
 
 // New creates a new [Vaxis] instance. Calling New will query the underlying
@@ -205,7 +206,6 @@ func New(opts Options) (*Vaxis, error) {
 	vx.chQuit = make(chan bool)
 	vx.chSizeDone = make(chan bool, 1)
 	vx.charCache = make(map[string]int, 256)
-	vx.chBg = make(chan string, 1)
 	err = vx.openTty(tgts)
 	if err != nil {
 		return nil, err
@@ -430,6 +430,12 @@ func (vx *Vaxis) render() {
 		reposition = true
 		cursor     Style
 	)
+
+	// request the background color from the terminal
+	if atomic.SwapInt32(&vx.osc11Request, 0) > 0 {
+		vx.tw.WriteString(osc11)
+	}
+
 outerLast:
 	// Delete any placements we don't have this round
 	for _, p1 := range vx.graphicsLast {
@@ -959,15 +965,21 @@ func (vx *Vaxis) handleSequence(seq ansi.Sequence) {
 		}
 	case ansi.OSC:
 		if strings.HasPrefix(string(seq.Payload), "11") {
-			// If we are here and don't know that the host terminal
-			// supports the sequence, it means we are handling the response
-			// to the initial query and thus nobody is expecting its actual
-			// content. In this case, we don't want to fill the channel buffer
-			// as no one will clear it.
 			if vx.CanReportBackgroundColor() {
-				vx.chBg <- string(seq.Payload)
+				var r, g, b int
+				data := string(seq.Payload)
+				n, err := fmt.Sscanf(data, "11;rgb:%x/%x/%x", &r, &g, &b)
+				if n == 3 && err == nil {
+					bgColor := RGBColor(uint8(r), uint8(g), uint8(b))
+					vx.PostEventBlocking(BgColor(bgColor))
+				} else {
+					log.Error("invalid OSC 11 payload: "+
+						"%s (err=%v)", data, err)
+					return
+				}
+			} else {
+				vx.PostEventBlocking(capabilityOsc11{})
 			}
-			vx.PostEventBlocking(capabilityOsc11{})
 		}
 		if strings.HasPrefix(string(seq.Payload), "52") {
 			vals := strings.Split(string(seq.Payload), ";")
@@ -998,27 +1010,16 @@ func (vx *Vaxis) handleSequence(seq ansi.Sequence) {
 	}
 }
 
-// QueryBackground queries the host terminal for background color and returns
-// it as an instance of vaxis.Color. If the host terminal doesn't support this,
-// Color(0) is returned instead. Make sure not to run this in the same
-// goroutine as Vaxis runs in or deadlock will occur.
-func (vx *Vaxis) QueryBackground() Color {
+// RequestBackgroundColor requests the background color from the terminal at the
+// next rendering loop. The background color will be returned as a BgColor
+// event in the main event loop.
+func (vx *Vaxis) RequestBackgroundColor() {
 	if !vx.CanReportBackgroundColor() {
-		return Color(0)
+		log.Debug("[osc11] background color requested, " +
+			"but not supported")
+		return
 	}
-	vx.tw.WriteStringLocked(osc11)
-	resp := <-vx.chBg
-	var r, g, b int
-	_, err := fmt.Sscanf(resp, "11;rgb:%x/%x/%x", &r, &g, &b)
-	if err != nil {
-		log.Error("QueryBackground: failed to parse the OSC 11 response: %s", err)
-		return Color(0)
-	}
-	// The returned value can in principle be 16 bits per channel, however
-	// we are not aware of any terminal that would do this, foot for
-	// instance just repeats the same 8 bits twice. Hence we only take the
-	// lower 8 bits.
-	return RGBColor(uint8(r), uint8(g), uint8(b))
+	atomic.StoreInt32(&vx.osc11Request, 1)
 }
 
 func (vx *Vaxis) sendQueries() {

@@ -21,6 +21,7 @@ type (
 	inBandResizeEvents     struct{}
 	appID                  string
 	terminalID             string
+	BgColor                Color
 )
 
 // Resize is delivered whenever a window size change is detected (likely via
