@@ -8,6 +8,7 @@ type Event interface{}
 type (
 	primaryDeviceAttribute struct{}
 	capabilitySixel        struct{}
+	capabilityOsc10        struct{}
 	capabilityOsc11        struct{}
 	synchronizedUpdates    struct{}
 	unicodeCoreCap         struct{}
@@ -22,6 +23,7 @@ type (
 	appID                  string
 	terminalID             string
 	BgColor                Color
+	FgColor                Color
 )
 
 // Resize is delivered whenever a window size change is detected (likely via

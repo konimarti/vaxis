@@ -218,6 +218,15 @@ func (vt *Model) Update(msg vaxis.Event) {
 			c[0], c[1], c[2])
 		log.Debug("[osc11] bg color: %v", c)
 		vt.pty.WriteString(resp)
+	case vaxis.FgColor:
+		c := vaxis.Color(msg).Params()
+		if len(c) != 3 {
+			return
+		}
+		resp := fmt.Sprintf("\x1b]10;rgb:%02x/%02x/%02x\x07",
+			c[0], c[1], c[2])
+		log.Debug("[osc10] fg color: %v", c)
+		vt.pty.WriteString(resp)
 	case vaxis.PasteStartEvent:
 		if vt.mode.paste {
 			vt.pty.WriteString("\x1B[200~")

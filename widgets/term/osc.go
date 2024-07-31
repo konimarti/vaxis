@@ -23,6 +23,14 @@ func (vt *Model) osc(data string) {
 		}
 	case "9":
 		vt.postEvent(EventNotify{Body: val})
+	case "10":
+		if strings.HasPrefix(val, "?") {
+			vt.vx.RequestForegroundColor()
+		} else {
+			s := "\x1b]" + data + "\x07"
+			vt.vx.WriteOSC(s)
+			// vt.pty.WriteString(s)
+		}
 	case "11":
 		vt.vx.RequestBackgroundColor()
 	case "777":

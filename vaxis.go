@@ -32,6 +32,7 @@ type capabilities struct {
 	colorThemeUpdates  bool
 	reportSizeChars    bool
 	reportSizePixels   bool
+	osc10              bool
 	osc11              bool
 	osc176             bool
 	inBandResize       bool
@@ -127,6 +128,7 @@ type Vaxis struct {
 	mu     sync.Mutex
 	resize int32
 
+	osc10Request int32
 	osc11Request int32
 }
 
@@ -228,6 +230,9 @@ outer:
 				if vx.graphicsProtocol < sixelGraphics {
 					vx.graphicsProtocol = sixelGraphics
 				}
+			case capabilityOsc10:
+				vx.caps.osc10 = true
+				log.Info("[capability] OSC 10 supported")
 			case capabilityOsc11:
 				vx.caps.osc11 = true
 				log.Info("[capability] OSC 11 supported")
@@ -430,6 +435,11 @@ func (vx *Vaxis) render() {
 		reposition = true
 		cursor     Style
 	)
+
+	// request the foreground color from the terminal
+	if atomic.SwapInt32(&vx.osc10Request, 0) > 0 {
+		vx.tw.WriteString(osc10)
+	}
 
 	// request the background color from the terminal
 	if atomic.SwapInt32(&vx.osc11Request, 0) > 0 {
@@ -964,6 +974,23 @@ func (vx *Vaxis) handleSequence(seq ansi.Sequence) {
 			vx.PostEventBlocking(kittyGraphics{})
 		}
 	case ansi.OSC:
+		if strings.HasPrefix(string(seq.Payload), "10") {
+			if vx.CanReportForegroundColor() {
+				var r, g, b int
+				data := string(seq.Payload)
+				n, err := fmt.Sscanf(data, "10;rgb:%x/%x/%x", &r, &g, &b)
+				if n == 3 && err == nil {
+					fgColor := RGBColor(uint8(r), uint8(g), uint8(b))
+					vx.PostEventBlocking(FgColor(fgColor))
+				} else {
+					log.Error("invalid OSC 10 payload: "+
+						"%s (err=%v)", data, err)
+					return
+				}
+			} else {
+				vx.PostEventBlocking(capabilityOsc10{})
+			}
+		}
 		if strings.HasPrefix(string(seq.Payload), "11") {
 			if vx.CanReportBackgroundColor() {
 				var r, g, b int
@@ -1022,6 +1049,21 @@ func (vx *Vaxis) RequestBackgroundColor() {
 	atomic.StoreInt32(&vx.osc11Request, 1)
 }
 
+func (vx *Vaxis) WriteOSC(s string) {
+	log.Info("OSC!! write data: %s", s)
+	vx.tw.WriteString("\x1b]" + s + "\x07")
+	vx.tw.Flush()
+}
+
+func (vx *Vaxis) RequestForegroundColor() {
+	if !vx.CanReportForegroundColor() {
+		log.Debug("[osc10] foreground color requested, " +
+			"but not supported")
+		return
+	}
+	atomic.StoreInt32(&vx.osc10Request, 1)
+}
+
 func (vx *Vaxis) sendQueries() {
 	// always query in the alt screen so a terminal who doesn't understand
 	// this doesn't get messed up. We are in full control of the alt screen
@@ -1049,6 +1091,8 @@ func (vx *Vaxis) sendQueries() {
 	// Query some terminfo capabilities
 	// Just another way to see if we have RGB support
 	_, _ = vx.tw.WriteString(xtgettcap("RGB"))
+	// Does the terminal respond to OSC 10 queries?
+	_, _ = vx.tw.WriteString(osc10)
 	// Does the terminal respond to OSC 11 queries?
 	_, _ = vx.tw.WriteString(osc11)
 	// Back up the current app ID
@@ -1429,6 +1473,10 @@ func (vx *Vaxis) CanSixel() bool {
 
 func (vx *Vaxis) CanReportBackgroundColor() bool {
 	return vx.caps.osc11
+}
+
+func (vx *Vaxis) CanReportForegroundColor() bool {
+	return vx.caps.osc10
 }
 
 func (vx *Vaxis) CanDisplayGraphics() bool {
